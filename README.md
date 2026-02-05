@@ -548,7 +548,7 @@ BASE_LOCATION = 'analytics/events';
 
 ## Acknowledgments
 
-- Built with [Snowflake Cortex Code](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents)
+- Built with [Snowflake Cortex Code](https://www.snowflake.com/en/product/features/cortex-code/)
 - Inspired by [SnowConvert](https://docs.snowflake.com/en/migrations/snowconvert-docs) migration patterns
 - Type mappings based on [Snowflake Iceberg Data Types](https://docs.snowflake.com/en/user-guide/tables-iceberg-data-types)
 
