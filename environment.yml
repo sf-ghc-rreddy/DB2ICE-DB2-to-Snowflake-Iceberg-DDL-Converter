@@ -1,0 +1,6 @@
+name: db2ice
+channels:
+  - snowflake
+dependencies:
+  - streamlit
+  - fpdf2

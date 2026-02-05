@@ -1,0 +1,15 @@
+definition_version: 2
+
+entities:
+  db2ice:
+    type: streamlit
+    identifier:
+      name: DB2ICE
+    title: "DB2ICE - DDL to Iceberg Converter"
+    main_file: app.py
+    pages_dir: null
+    stage: DB2ICE_STAGE
+    artifacts:
+      - app.py
+      - environment.yml
+      - db2ice/
