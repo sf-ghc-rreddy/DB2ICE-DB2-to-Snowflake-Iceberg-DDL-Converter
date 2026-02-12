@@ -41,7 +41,7 @@ class DataTypeMapper:
     
     # Direct mappings (no transformation needed)
     DIRECT_MAPPINGS = {
-        'SMALLINT': 'SMALLINT',
+        'SMALLINT': 'INTEGER',  # Iceberg doesn't support SMALLINT
         'INTEGER': 'INTEGER',
         'INT': 'INTEGER',
         'BIGINT': 'BIGINT',
@@ -178,58 +178,56 @@ class DataTypeMapper:
         # Unknown type
         return TypeMapping(
             source_type=db2_type,
-            target_type='VARCHAR',
+            target_type='STRING',
             status=ConversionStatus.LOSSY,
             ewi_code='SSC-EWI-DB2ICE-0099',
-            ewi_message=f'Unknown DB2 type {db2_type} converted to VARCHAR'
+            ewi_message=f'Unknown DB2 type {db2_type} converted to STRING'
         )
     
     def _map_char(self, length: Optional[int]) -> TypeMapping:
-        """CHAR -> VARCHAR (Iceberg doesn't support fixed-length CHAR)"""
-        target_length = length if length else 1
+        """CHAR -> STRING (Iceberg doesn't support fixed-length CHAR or VARCHAR(n))"""
         return TypeMapping(
             source_type=f'CHAR({length})' if length else 'CHAR',
-            target_type=f'VARCHAR({target_length})',
+            target_type='STRING',
             status=ConversionStatus.COMPATIBLE,
             ewi_code=self.EWI_CODES['CHAR_TO_VARCHAR'],
-            ewi_message='CHAR converted to VARCHAR - Iceberg does not support fixed-length CHAR',
+            ewi_message='CHAR converted to STRING - Iceberg does not support fixed-length CHAR',
             notes='Padding behavior may differ'
         )
     
     def _map_varchar(self, length: Optional[int]) -> TypeMapping:
-        """VARCHAR -> VARCHAR"""
+        """VARCHAR -> STRING (Iceberg doesn't support VARCHAR(n) with length constraints)"""
         if length and length > self.MAX_VARCHAR_SIZE:
             return TypeMapping(
                 source_type=f'VARCHAR({length})',
-                target_type='VARCHAR',
+                target_type='STRING',
                 status=ConversionStatus.LOSSY,
                 ewi_code=self.EWI_CODES['LOB_SIZE_LIMIT'],
-                ewi_message=f'VARCHAR({length}) exceeds Iceberg limit, using VARCHAR without length'
+                ewi_message=f'VARCHAR({length}) exceeds Iceberg limit, using STRING'
             )
         
-        target = f'VARCHAR({length})' if length else 'VARCHAR'
         return TypeMapping(
             source_type=f'VARCHAR({length})' if length else 'VARCHAR',
-            target_type=target,
+            target_type='STRING',
             status=ConversionStatus.DIRECT
         )
     
     def _map_long_varchar(self) -> TypeMapping:
-        """LONG VARCHAR -> VARCHAR"""
+        """LONG VARCHAR -> STRING"""
         return TypeMapping(
             source_type='LONG VARCHAR',
-            target_type='VARCHAR',
+            target_type='STRING',
             status=ConversionStatus.COMPATIBLE,
             ewi_code=self.EWI_CODES['LONG_VARCHAR'],
-            ewi_message='LONG VARCHAR converted to VARCHAR'
+            ewi_message='LONG VARCHAR converted to STRING'
         )
     
     def _map_clob(self, length: Optional[int]) -> TypeMapping:
-        """CLOB -> VARCHAR (with size warning if > 128MB)"""
+        """CLOB -> STRING (with size warning if > 128MB)"""
         if length and length > self.MAX_LOB_SIZE:
             return TypeMapping(
                 source_type=f'CLOB({length})',
-                target_type='VARCHAR',
+                target_type='STRING',
                 status=ConversionStatus.LOSSY,
                 ewi_code=self.EWI_CODES['LOB_SIZE_LIMIT'],
                 ewi_message=f'CLOB size {length} exceeds Snowflake 128MB limit - data truncation may occur'
@@ -237,9 +235,9 @@ class DataTypeMapper:
         
         return TypeMapping(
             source_type=f'CLOB({length})' if length else 'CLOB',
-            target_type='VARCHAR',
+            target_type='STRING',
             status=ConversionStatus.COMPATIBLE,
-            notes='CLOB converted to VARCHAR'
+            notes='CLOB converted to STRING'
         )
     
     def _map_decimal(self, precision: Optional[int], scale: Optional[int]) -> TypeMapping:
@@ -323,7 +321,7 @@ class DataTypeMapper:
         )
     
     def _map_binary(self, length: Optional[int]) -> TypeMapping:
-        """BINARY -> BINARY"""
+        """BINARY -> BINARY (Iceberg doesn't support length constraints)"""
         if length and length > self.MAX_BINARY_SIZE:
             return TypeMapping(
                 source_type=f'BINARY({length})',
@@ -334,23 +332,23 @@ class DataTypeMapper:
             )
         return TypeMapping(
             source_type=f'BINARY({length})' if length else 'BINARY',
-            target_type=f'BINARY({length})' if length else 'BINARY',
+            target_type='BINARY',
             status=ConversionStatus.DIRECT
         )
     
     def _map_varbinary(self, length: Optional[int]) -> TypeMapping:
-        """VARBINARY -> VARBINARY"""
+        """VARBINARY -> BINARY (Iceberg doesn't support length constraints)"""
         if length and length > self.MAX_BINARY_SIZE:
             return TypeMapping(
                 source_type=f'VARBINARY({length})',
-                target_type='VARBINARY',
+                target_type='BINARY',
                 status=ConversionStatus.LOSSY,
                 ewi_code=self.EWI_CODES['LOB_SIZE_LIMIT'],
                 ewi_message=f'VARBINARY({length}) exceeds Iceberg limit'
             )
         return TypeMapping(
             source_type=f'VARBINARY({length})' if length else 'VARBINARY',
-            target_type=f'VARBINARY({length})' if length else 'VARBINARY',
+            target_type='BINARY',
             status=ConversionStatus.DIRECT
         )
     
@@ -373,83 +371,78 @@ class DataTypeMapper:
         )
     
     def _map_graphic(self, length: Optional[int]) -> TypeMapping:
-        """GRAPHIC -> VARCHAR (DBCS double-byte to Unicode)"""
-        # GRAPHIC stores double-byte characters, length is in DBCS characters
-        # Convert to VARCHAR with appropriate length (2x for worst case)
-        target_length = (length * 4) if length else None
+        """GRAPHIC -> STRING (DBCS double-byte to Unicode)"""
         return TypeMapping(
             source_type=f'GRAPHIC({length})' if length else 'GRAPHIC',
-            target_type=f'VARCHAR({target_length})' if target_length else 'VARCHAR',
+            target_type='STRING',
             status=ConversionStatus.COMPATIBLE,
             ewi_code=self.EWI_CODES['GRAPHIC_CONVERT'],
-            ewi_message='GRAPHIC (DBCS) converted to VARCHAR - verify character encoding'
+            ewi_message='GRAPHIC (DBCS) converted to STRING - verify character encoding'
         )
     
     def _map_vargraphic(self, length: Optional[int]) -> TypeMapping:
-        """VARGRAPHIC -> VARCHAR"""
-        target_length = (length * 4) if length else None
+        """VARGRAPHIC -> STRING"""
         return TypeMapping(
             source_type=f'VARGRAPHIC({length})' if length else 'VARGRAPHIC',
-            target_type=f'VARCHAR({target_length})' if target_length else 'VARCHAR',
+            target_type='STRING',
             status=ConversionStatus.COMPATIBLE,
             ewi_code=self.EWI_CODES['GRAPHIC_CONVERT'],
-            ewi_message='VARGRAPHIC (DBCS) converted to VARCHAR - verify character encoding'
+            ewi_message='VARGRAPHIC (DBCS) converted to STRING - verify character encoding'
         )
     
     def _map_long_vargraphic(self) -> TypeMapping:
-        """LONG VARGRAPHIC -> VARCHAR"""
+        """LONG VARGRAPHIC -> STRING"""
         return TypeMapping(
             source_type='LONG VARGRAPHIC',
-            target_type='VARCHAR',
+            target_type='STRING',
             status=ConversionStatus.COMPATIBLE,
             ewi_code=self.EWI_CODES['GRAPHIC_CONVERT'],
-            ewi_message='LONG VARGRAPHIC converted to VARCHAR - verify character encoding'
+            ewi_message='LONG VARGRAPHIC converted to STRING - verify character encoding'
         )
     
     def _map_dbclob(self, length: Optional[int]) -> TypeMapping:
-        """DBCLOB -> VARCHAR"""
+        """DBCLOB -> STRING"""
         if length and length > self.MAX_LOB_SIZE:
             return TypeMapping(
                 source_type=f'DBCLOB({length})',
-                target_type='VARCHAR',
+                target_type='STRING',
                 status=ConversionStatus.LOSSY,
                 ewi_code=self.EWI_CODES['LOB_SIZE_LIMIT'],
                 ewi_message=f'DBCLOB size {length} exceeds Snowflake limit - data truncation may occur'
             )
         return TypeMapping(
             source_type=f'DBCLOB({length})' if length else 'DBCLOB',
-            target_type='VARCHAR',
+            target_type='STRING',
             status=ConversionStatus.COMPATIBLE,
             ewi_code=self.EWI_CODES['GRAPHIC_CONVERT'],
-            ewi_message='DBCLOB converted to VARCHAR - verify character encoding'
+            ewi_message='DBCLOB converted to STRING - verify character encoding'
         )
     
     def _map_xml(self) -> TypeMapping:
         """XML -> UNSUPPORTED (no Iceberg equivalent)"""
         return TypeMapping(
             source_type='XML',
-            target_type='VARCHAR',
+            target_type='STRING',
             status=ConversionStatus.UNSUPPORTED,
             ewi_code=self.EWI_CODES['XML_UNSUPPORTED'],
             ewi_message='XML type not supported in Iceberg tables - manual conversion required'
         )
     
     def _map_rowid(self) -> TypeMapping:
-        """ROWID -> VARCHAR (system-generated, cannot be migrated directly)"""
+        """ROWID -> STRING (system-generated, cannot be migrated directly)"""
         return TypeMapping(
             source_type='ROWID',
-            target_type='VARCHAR(40)',
+            target_type='STRING',
             status=ConversionStatus.LOSSY,
             ewi_code=self.EWI_CODES['ROWID_CONVERT'],
-            ewi_message='ROWID converted to VARCHAR - values will not be preserved during migration'
+            ewi_message='ROWID converted to STRING - values will not be preserved during migration'
         )
     
     def _map_for_bit_data(self, db2_type: str, length: Optional[int]) -> TypeMapping:
         """Handle FOR BIT DATA modifier - convert to BINARY"""
-        target_length = length if length else 1
         return TypeMapping(
             source_type=f'{db2_type}({length}) FOR BIT DATA' if length else f'{db2_type} FOR BIT DATA',
-            target_type=f'BINARY({target_length})',
+            target_type='BINARY',
             status=ConversionStatus.COMPATIBLE,
             ewi_code=self.EWI_CODES['FOR_BIT_DATA'],
             ewi_message='FOR BIT DATA converted to BINARY type'

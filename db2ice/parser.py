@@ -99,6 +99,7 @@ class TableDefinition:
     columns: list = field(default_factory=list)
     constraints: list = field(default_factory=list)
     partition: Optional[PartitionSpec] = None
+    distribute_by_hash: Optional[str] = None  # Column name for DISTRIBUTE BY HASH -> CLUSTER BY
     tablespace: Optional[str] = None
     editproc: Optional[str] = None
     validproc: Optional[str] = None
@@ -157,6 +158,7 @@ class DB2Parser:
         # Split into individual statements
         statements = self._split_statements(ddl)
         
+        # First pass: Process CREATE TABLE statements
         for stmt in statements:
             stmt = stmt.strip()
             if not stmt:
@@ -183,7 +185,93 @@ class DB2Parser:
                 except Exception as e:
                     self.errors.append(f"Failed to parse DECLARE statement: {str(e)}")
         
+        # Second pass: Process ALTER TABLE and DISTRIBUTE BY HASH statements
+        # These need to be linked back to the tables created in the first pass
+        for stmt in statements:
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            
+            stmt_without_comments = self._strip_leading_comments(stmt)
+            
+            # Process ALTER TABLE statements (PARTITION BY, PRIMARY KEY)
+            if re.match(r'^\s*ALTER\s+TABLE', stmt_without_comments, re.IGNORECASE):
+                self._process_alter_table(stmt_without_comments, tables)
+            
+            # Process DISTRIBUTE BY HASH statements
+            elif re.match(r'^\s*DISTRIBUTE\s+BY\s+HASH', stmt_without_comments, re.IGNORECASE):
+                self._process_distribute_by_hash(stmt_without_comments, tables)
+        
         return tables
+    
+    def _process_alter_table(self, stmt: str, tables: list):
+        """Process ALTER TABLE statements for partition and primary key"""
+        # Extract table name from ALTER TABLE schema.table
+        alter_match = re.match(
+            r'ALTER\s+TABLE\s+(?:(["\w]+)\.)?(["\w]+)',
+            stmt, re.IGNORECASE
+        )
+        if not alter_match:
+            return
+        
+        schema = self._clean_identifier(alter_match.group(1)) if alter_match.group(1) else None
+        table_name = self._clean_identifier(alter_match.group(2))
+        
+        # Find matching table
+        target_table = None
+        for t in tables:
+            if t.name.upper() == table_name.upper():
+                if schema is None or (t.schema and t.schema.upper() == schema.upper()):
+                    target_table = t
+                    break
+        
+        if not target_table:
+            self.warnings.append(f"ALTER TABLE references unknown table: {schema}.{table_name}" if schema else f"ALTER TABLE references unknown table: {table_name}")
+            return
+        
+        # Check for PARTITION BY RANGE
+        partition_match = re.search(
+            r'PARTITION\s+BY\s+(RANGE|HASH)\s*\(([^)]+)\)',
+            stmt, re.IGNORECASE
+        )
+        if partition_match:
+            partition_type = partition_match.group(1).upper()
+            columns = [self._clean_identifier(c.strip()) for c in partition_match.group(2).split(',')]
+            target_table.partition = PartitionSpec(
+                type=partition_type,
+                columns=columns,
+                raw_definition=partition_match.group(0)
+            )
+        
+        # Check for ADD CONSTRAINT ... PRIMARY KEY
+        pk_match = re.search(
+            r'ADD\s+CONSTRAINT\s+(["\w]+)\s+PRIMARY\s+KEY\s*\(([^)]+)\)',
+            stmt, re.IGNORECASE
+        )
+        if pk_match:
+            pk_name = self._clean_identifier(pk_match.group(1))
+            pk_columns = [self._clean_identifier(c.strip()) for c in pk_match.group(2).split(',')]
+            # Add as constraint if not already present
+            has_pk = any(c.type == 'PRIMARY KEY' for c in target_table.constraints)
+            if not has_pk:
+                target_table.constraints.append(Constraint(
+                    type='PRIMARY KEY',
+                    name=pk_name,
+                    columns=pk_columns
+                ))
+    
+    def _process_distribute_by_hash(self, stmt: str, tables: list):
+        """Process DISTRIBUTE BY HASH statement"""
+        # DISTRIBUTE BY HASH (column_name)
+        dist_match = re.search(
+            r'DISTRIBUTE\s+BY\s+HASH\s*\(([^)]+)\)',
+            stmt, re.IGNORECASE
+        )
+        if dist_match:
+            column = self._clean_identifier(dist_match.group(1).strip())
+            # Apply to the last table in the list (DB2 convention - applies to preceding CREATE TABLE)
+            if tables:
+                tables[-1].distribute_by_hash = column
     
     def _strip_leading_comments(self, stmt: str) -> str:
         """Remove leading SQL comments from a statement"""
@@ -342,8 +430,27 @@ class DB2Parser:
         
         return -1
     
+    def _strip_inline_comments(self, s: str) -> str:
+        """Remove inline SQL comments (-- comment) while preserving string literals"""
+        lines = s.split('\n')
+        result = []
+        for line in lines:
+            # Find -- that's not inside a string literal
+            in_string = False
+            for i, char in enumerate(line):
+                if char == "'" and (i == 0 or line[i-1] != '\\'):
+                    in_string = not in_string
+                elif char == '-' and i + 1 < len(line) and line[i+1] == '-' and not in_string:
+                    # Found inline comment, truncate line here
+                    line = line[:i]
+                    break
+            result.append(line)
+        return '\n'.join(result)
+    
     def _parse_columns_and_constraints(self, columns_str: str, table: TableDefinition):
         """Parse column definitions and inline constraints"""
+        # Strip inline comments first
+        columns_str = self._strip_inline_comments(columns_str)
         # Split by comma, respecting parentheses and strings
         parts = self._split_column_defs(columns_str)
         

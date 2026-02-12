@@ -152,6 +152,16 @@ class DB2IceConverter:
         lines.extend(column_lines)
         lines.append(")")
         
+        # PARTITION BY clause (from DB2 PARTITION BY RANGE columns)
+        if table.partition and table.partition.columns:
+            partition_cols = ", ".join(self._format_identifier(c) for c in table.partition.columns)
+            lines.append(f"PARTITION BY ({partition_cols})")
+        
+        # CLUSTER BY clause (from DB2 DISTRIBUTE BY HASH column)
+        if table.distribute_by_hash:
+            cluster_col = self._format_identifier(table.distribute_by_hash)
+            lines.append(f"CLUSTER BY ({cluster_col})")
+        
         # Iceberg-specific clauses
         lines.append("CATALOG = 'SNOWFLAKE'")
         lines.append(f"EXTERNAL_VOLUME = '{self.external_volume}'")
@@ -302,6 +312,14 @@ class DB2IceConverter:
     
     def _format_identifier(self, identifier: str) -> str:
         """Format an identifier (quote if needed)"""
+        # Handle schema.table format - format each part separately
+        if '.' in identifier:
+            parts = identifier.split('.', 1)
+            return f"{self._format_single_identifier(parts[0])}.{self._format_single_identifier(parts[1])}"
+        return self._format_single_identifier(identifier)
+    
+    def _format_single_identifier(self, identifier: str) -> str:
+        """Format a single identifier (without dots)"""
         # Check if identifier needs quoting
         if self._needs_quoting(identifier):
             return f'"{identifier}"'
