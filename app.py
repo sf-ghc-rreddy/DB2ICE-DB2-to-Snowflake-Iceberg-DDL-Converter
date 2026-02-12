@@ -1240,26 +1240,17 @@ def render_input_card():
     else:
         st.info("📥 **Snowflake Standard → Iceberg**: Convert existing Snowflake tables to Managed Iceberg format", icon="🔄")
     
+    # ===== HANDLE FILE UPLOAD FIRST (before text_area is rendered) =====
+    # We use a separate container/approach to handle file upload state
+    # Check if we need to process uploaded content
+    if 'pending_upload_content' in st.session_state:
+        # This was set on a previous run, now we can use it
+        pass
+    
     # Input area
     col_main, col_side = st.columns([4, 1], gap="large")
     
-    with col_main:
-        # Dynamic placeholder based on source type
-        if st.session_state.source_type == 'db2':
-            placeholder = "-- DB2 DDL\nCREATE TABLE SCHEMA.TABLE_NAME (\n    COLUMN1 INTEGER NOT NULL,\n    COLUMN2 VARCHAR(100),\n    PRIMARY KEY (COLUMN1)\n);"
-        else:
-            placeholder = "-- Snowflake DDL\nCREATE TABLE SCHEMA.TABLE_NAME (\n    COLUMN1 NUMBER(38,0) NOT NULL,\n    COLUMN2 VARCHAR(100),\n    PRIMARY KEY (COLUMN1)\n);"
-        
-        ddl = st.text_area(
-            "DDL Input",
-            value=st.session_state.get('input_ddl', ''),
-            height=300,
-            placeholder=placeholder,
-            label_visibility="collapsed"
-        )
-        # Always sync back to session state
-        st.session_state.input_ddl = ddl
-    
+    # Render the sidebar first to capture file uploads
     with col_side:
         st.markdown("""
         <div style="
@@ -1275,11 +1266,16 @@ def render_input_card():
         </div>
         """, unsafe_allow_html=True)
         
-        uploaded = st.file_uploader("Upload", type=['sql', 'ddl', 'txt'], label_visibility="collapsed")
-        if uploaded:
-            content = uploaded.read().decode('utf-8')
-            st.session_state.input_ddl = content
-            st.rerun()
+        uploaded = st.file_uploader("Upload", type=['sql', 'ddl', 'txt'], label_visibility="collapsed", key="ddl_uploader")
+        if uploaded is not None:
+            # Check if this is a NEW upload (not already processed)
+            file_id = f"{uploaded.name}_{uploaded.size}"
+            if st.session_state.get('last_uploaded_file_id') != file_id:
+                content = uploaded.read().decode('utf-8')
+                st.session_state.input_ddl = content
+                st.session_state.just_uploaded = True
+                st.session_state.last_uploaded_file_id = file_id
+                st.rerun()
         
         st.markdown("<div style='height: 0.5rem'></div>", unsafe_allow_html=True)
         
@@ -1290,7 +1286,30 @@ def render_input_card():
                 st.session_state.input_ddl = SAMPLE_SNOWFLAKE_DDL
             else:
                 st.session_state.input_ddl = SAMPLE_DDL
+            st.session_state.just_uploaded = True
             st.rerun()
+    
+    with col_main:
+        # Dynamic placeholder based on source type
+        if st.session_state.source_type == 'db2':
+            placeholder = "-- DB2 DDL\nCREATE TABLE SCHEMA.TABLE_NAME (\n    COLUMN1 INTEGER NOT NULL,\n    COLUMN2 VARCHAR(100),\n    PRIMARY KEY (COLUMN1)\n);"
+        else:
+            placeholder = "-- Snowflake DDL\nCREATE TABLE SCHEMA.TABLE_NAME (\n    COLUMN1 NUMBER(38,0) NOT NULL,\n    COLUMN2 VARCHAR(100),\n    PRIMARY KEY (COLUMN1)\n);"
+        
+        # Use value parameter WITHOUT a key - this allows us to control the value
+        ddl = st.text_area(
+            "DDL Input",
+            value=st.session_state.get('input_ddl', ''),
+            height=300,
+            placeholder=placeholder,
+            label_visibility="collapsed"
+        )
+        # Update session state with what user typed, but NOT if we just uploaded/loaded
+        if st.session_state.get('just_uploaded', False):
+            st.session_state.just_uploaded = False
+            # Keep the uploaded content, don't overwrite with empty text_area value
+        else:
+            st.session_state.input_ddl = ddl
     
     return st.session_state.get('input_ddl', '')
 
